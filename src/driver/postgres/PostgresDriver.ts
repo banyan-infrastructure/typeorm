@@ -18,7 +18,8 @@ import {TableColumn} from "../../schema-builder/table/TableColumn";
 import {PostgresConnectionCredentialsOptions} from "./PostgresConnectionCredentialsOptions";
 import {EntityMetadata} from "../../metadata/EntityMetadata";
 import {OrmUtils} from "../../util/OrmUtils";
-
+import {Parser} from "node-sql-parser";
+import {RandomGenerator} from "../../util/RandomGenerator";
 /**
  * Organizes communication with PostgreSQL DBMS.
  */
@@ -907,8 +908,42 @@ export class PostgresDriver implements Driver {
      */
     protected executeQuery(connection: any, query: string) {
         return new Promise((ok, fail) => {
-            connection.query(query, (err: any, result: any) => {
+            var parser = new Parser();
+            var ast : any = parser.astify(query);
+            var doQuery : string = query;
+            var mappings : { [key: string] : string } = {};
+            if (typeof(ast.ast.columns) == 'string') {
+                ast = null;
+            } else {
+                var cols = ast.columns;
+                for (var i = 0; i < cols.length; i++) {
+                    var col = cols[i];
+                    if (col.as) {
+                        if (col.as.length > 63) {
+                            col.realname = col.as;
+                            col.as = RandomGenerator.sha1(`_${col.realname}`);
+                            console.log(`mapping ${col.as} to ${col.realname}`);
+                            mappings[col.as] = col.realname;
+                        }
+                    }
+                }
+                doQuery = parser.sqlify(ast);
+            }
+            connection.query(doQuery, (err: any, result: any) => {
                 if (err) return fail(err);
+                var mkeys = Object.keys(mappings);
+                if (result.rows && result.rows.length) {
+                    for (var i = 0; i < result.rows.length; i++) {
+                        var row = result.rows[i];
+                        for (var j = 0; j < mkeys.length; j++) {
+                            var mas = mkeys[j];
+                            var mreal = mappings[mas];
+                            if (row[mas] !== undefined) {
+                                row[mreal] = row[mas];
+                            }
+                        }
+                    }
+                }
                 ok(result);
             });
         });
